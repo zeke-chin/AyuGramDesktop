@@ -38,6 +38,7 @@ public:
 	void start(not_null<FileDelegate*> delegate, StartOptions options);
 	void wake();
 	void stop(bool stillActive = false);
+	void requestSeek(crl::time position);
 
 	[[nodiscard]] bool isRemoteLoader() const;
 	void setLoaderPriority(int priority);
@@ -53,14 +54,19 @@ private:
 		Context(not_null<FileDelegate*> delegate, not_null<Reader*> reader);
 		~Context();
 
-		void start(StartOptions options);
+		void start(
+			StartOptions options,
+			FFmpeg::FormatPointer savedFormat = nullptr);
 		void readNextPacket();
 
 		void interrupt();
 		void wake();
+		void requestSeek(crl::time position);
 		[[nodiscard]] bool interrupted() const;
 		[[nodiscard]] bool failed() const;
 		[[nodiscard]] bool finished() const;
+
+		[[nodiscard]] FFmpeg::FormatPointer takeFormat();
 
 		void stopStreamingAsync();
 
@@ -99,6 +105,7 @@ private:
 
 		void handleEndOfFile();
 		void sendFullInCache(bool force = false);
+		void performSeek();
 
 		const not_null<FileDelegate*> _delegate;
 		const not_null<Reader*> _reader;
@@ -114,11 +121,16 @@ private:
 
 		FFmpeg::FormatPointer _format;
 
+		std::atomic<crl::time> _pendingSeek = -1;
+		int _primaryStreamIndex = -1;
+		AVRational _primaryTimeBase = {};
+
 	};
 
 	std::optional<Context> _context;
 	std::shared_ptr<Reader> _reader;
 	std::thread _thread;
+	FFmpeg::FormatPointer _savedFormat;
 
 };
 

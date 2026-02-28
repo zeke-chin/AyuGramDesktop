@@ -44,6 +44,10 @@ File::Context::Context(
 
 File::Context::~Context() = default;
 
+FFmpeg::FormatPointer File::Context::takeFormat() {
+	return std::move(_format);
+}
+
 int File::Context::Read(void *opaque, uint8_t *buffer, int bufferSize) {
 	return static_cast<Context*>(opaque)->read(
 		bytes::make_span(buffer, bufferSize));
@@ -275,26 +279,43 @@ std::variant<FFmpeg::Packet, FFmpeg::AvErrorWrap> File::Context::readPacket() {
 	return error;
 }
 
-void File::Context::start(StartOptions options) {
+void File::Context::start(
+		StartOptions options,
+		FFmpeg::FormatPointer savedFormat) {
 	Expects(options.seekable || !options.position);
 
+	const auto startTime = crl::now();
 	auto error = FFmpeg::AvErrorWrap();
 
 	if (unroll()) {
 		return;
 	}
-	auto format = FFmpeg::MakeFormatPointer(
-		static_cast<void*>(this),
-		&Context::Read,
-		nullptr,
-		options.seekable ? &Context::Seek : nullptr);
-	if (!format) {
-		return fail(Error::OpenFailed);
-	}
 
-	if ((error = avformat_find_stream_info(format.get(), nullptr))) {
-		return logFatal(qstr("avformat_find_stream_info"), error);
+	FFmpeg::FormatPointer format;
+	crl::time afterFormat = startTime;
+	if (savedFormat) {
+		// Fast path: reuse existing format context.
+		format = std::move(savedFormat);
+		// Update I/O callbacks to point to this new Context.
+		format->pb->opaque = static_cast<void*>(this);
+		afterFormat = crl::now();
+	} else {
+		// Original path: create new format and probe streams.
+		format = FFmpeg::MakeFormatPointer(
+			static_cast<void*>(this),
+			&Context::Read,
+			nullptr,
+			options.seekable ? &Context::Seek : nullptr);
+		if (!format) {
+			return fail(Error::OpenFailed);
+		}
+		afterFormat = crl::now();
+
+		if ((error = avformat_find_stream_info(format.get(), nullptr))) {
+			return logFatal(qstr("avformat_find_stream_info"), error);
+		}
 	}
+	const auto afterStreamInfo = crl::now();
 
 	const auto mode = _delegate->fileOpenMode();
 	auto video = initStream(
@@ -336,11 +357,24 @@ void File::Context::start(StartOptions options) {
 		_queuedPackets[audio.index].reserve(kMaxQueuedPackets);
 	}
 
+	const auto videoIndex = video.codec ? video.index : -1;
+	const auto videoTimeBase = video.timeBase;
+	const auto audioIndex = audio.codec ? audio.index : -1;
+	const auto audioTimeBase = audio.timeBase;
+
 	const auto header = _reader->headerSize();
 	if (!_delegate->fileReady(header, std::move(video), std::move(audio))) {
 		return fail(Error::OpenFailed);
 	}
+	_primaryStreamIndex = videoIndex >= 0 ? videoIndex : audioIndex;
+	_primaryTimeBase = videoIndex >= 0 ? videoTimeBase : audioTimeBase;
 	_format = std::move(format);
+	LOG(("File::start Timing: MakeFormat=%1ms, findStreamInfo=%2ms, "
+		"initStreams+seek+ready=%3ms, total=%4ms"
+		).arg(afterFormat - startTime
+		).arg(afterStreamInfo - afterFormat
+		).arg(crl::now() - afterStreamInfo
+		).arg(crl::now() - startTime));
 }
 
 void File::Context::sendFullInCache(bool force) {
@@ -354,7 +388,34 @@ void File::Context::sendFullInCache(bool force) {
 	}
 }
 
+void File::Context::performSeek() {
+	const auto position = _pendingSeek.exchange(-1);
+	if (position < 0 || !_format) {
+		return;
+	}
+
+	// Clear queued packets.
+	for (auto &[index, packets] : _queuedPackets) {
+		packets.clear();
+	}
+	_readTillEnd = false;
+
+	// Seek on the existing format context.
+	av_seek_frame(
+		_format.get(),
+		_primaryStreamIndex,
+		FFmpeg::TimeToPts(position, _primaryTimeBase),
+		AVSEEK_FLAG_BACKWARD);
+
+	// Notify Player that seek is done.
+	_delegate->fileSeekDone(position);
+}
+
 void File::Context::readNextPacket() {
+	if (_pendingSeek.load() >= 0) {
+		performSeek();
+		return;
+	}
 	auto result = readPacket();
 	if (unroll()) {
 		return;
@@ -422,6 +483,11 @@ void File::Context::wake() {
 	_semaphore.release();
 }
 
+void File::Context::requestSeek(crl::time position) {
+	_pendingSeek.store(position);
+	_semaphore.release();
+}
+
 bool File::Context::interrupted() const {
 	return _interrupted;
 }
@@ -456,12 +522,17 @@ File::File(std::shared_ptr<Reader> reader)
 void File::start(not_null<FileDelegate*> delegate, StartOptions options) {
 	stop(true);
 
+	auto format = std::move(_savedFormat);
 	_reader->startStreaming();
 	_context.emplace(delegate, _reader.get());
 
-	_thread = std::thread([=, context = &*_context] {
+	_thread = std::thread([
+		=,
+		context = &*_context,
+		format = std::move(format)
+	]() mutable {
 		crl::toggle_fp_exceptions(true);
-		context->start(options);
+		context->start(options, std::move(format));
 		while (!context->finished()) {
 			context->readNextPacket();
 		}
@@ -477,11 +548,24 @@ void File::wake() {
 	_context->wake();
 }
 
+void File::requestSeek(crl::time position) {
+	if (_context.has_value()) {
+		_context->requestSeek(position);
+	}
+}
+
 void File::stop(bool stillActive) {
 	if (_thread.joinable()) {
 		_context->interrupt();
 		_thread.join();
 	}
+	if (stillActive && _context.has_value()) {
+		_savedFormat = _context->takeFormat();
+	} else if (!stillActive) {
+		_savedFormat = nullptr;
+	}
+	// When stillActive && !_context: keep existing _savedFormat
+	// (Player::stop already saved it, File::start calls stop again).
 	_reader->stopStreaming(stillActive);
 	_context.reset();
 }

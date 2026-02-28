@@ -37,6 +37,7 @@ public:
 	Player &operator=(const Player &other) = delete;
 
 	void play(const PlaybackOptions &options);
+	void seek(crl::time position);
 	void pause();
 	void resume();
 	void stop();
@@ -105,6 +106,7 @@ private:
 	void fileError(Error error) override;
 	void fileWaitingForData() override;
 	void fileFullInCache(bool fullInCache) override;
+	void fileSeekDone(crl::time position) override;
 	bool fileProcessPackets(
 		base::flat_map<int, std::vector<FFmpeg::Packet>> &packets) override;
 	void fileProcessEndOfFile() override;

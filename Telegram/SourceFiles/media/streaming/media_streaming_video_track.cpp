@@ -99,6 +99,7 @@ public:
 	void resume(crl::time time);
 	void setSpeed(float64 speed);
 	void setWaitForMarkAsShown(bool wait);
+	void seekFlush(crl::time targetPosition);
 	void interrupt();
 	void frameShown();
 	void addTimelineDelay(crl::time delayed);
@@ -586,6 +587,22 @@ void VideoTrackObject::setWaitForMarkAsShown(bool wait) {
 		return;
 	}
 	_options.waitForMarkAsShown = wait;
+}
+
+void VideoTrackObject::seekFlush(crl::time targetPosition) {
+	if (interrupted()) {
+		return;
+	}
+	avcodec_flush_buffers(_stream.codec.get());
+	_stream.queue.clear();
+	_frameIndex = 0;
+	_readTillEnd = false;
+	_initialSkippingFrame = nullptr;
+	_options.position = targetPosition;
+	_syncTimePoint.trackTime = targetPosition;
+	_syncTimePoint.worldTime = crl::now();
+	_pausedTime = kTimeUnknown;
+	_resumedTime = _syncTimePoint.worldTime;
 }
 
 bool VideoTrackObject::interrupted() const {
@@ -1137,6 +1154,12 @@ void VideoTrack::setSpeed(float64 speed) {
 void VideoTrack::setWaitForMarkAsShown(bool wait) {
 	_wrapped.with([=](Implementation &unwrapped) {
 		unwrapped.setWaitForMarkAsShown(wait);
+	});
+}
+
+void VideoTrack::seekFlush(crl::time targetPosition) {
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.seekFlush(targetPosition);
 	});
 }
 

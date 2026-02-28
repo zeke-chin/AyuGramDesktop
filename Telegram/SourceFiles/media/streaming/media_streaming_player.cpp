@@ -536,9 +536,11 @@ void Player::play(const PlaybackOptions &options) {
 	// Looping video with audio is not supported for now.
 	Expects(!options.loop || (options.mode != Mode::Both));
 
+	const auto playStart = crl::now();
 	const auto previous = getCurrentReceivedTill(computeTotalDuration());
 
 	stop(true);
+	const auto afterStop = crl::now();
 	_lastFailure = std::nullopt;
 
 	savePreviousReceivedTill(options, previous);
@@ -555,6 +557,49 @@ void Player::play(const PlaybackOptions &options) {
 		.durationOverride = options.durationOverride,
 		.seekable = _options.seekable,
 		.hwAllow = _options.hwAllowed,
+	});
+	LOG(("Player::play Timing: stop=%1ms, file->start=%2ms, total=%3ms"
+		).arg(afterStop - playStart
+		).arg(crl::now() - afterStop
+		).arg(crl::now() - playStart));
+}
+
+void Player::seek(crl::time position) {
+	if (_stage != Stage::Started || !_options.seekable) {
+		return;
+	}
+
+	_options.position = position;
+	_audioFinished = false;
+	_videoFinished = false;
+	_readTillEnd = false;
+	_nextFrameTime = kTimeUnknown;
+	_renderFrameTimer.cancel();
+	_pauseReading = false;
+
+	// Video Track: flush codec buffers on the Track queue thread.
+	if (_video) {
+		_video->seekFlush(position);
+	}
+
+	// Audio Track: due to deep coupling with Mixer, rebuild it.
+	// This still saves the expensive format/video codec rebuild.
+	if (_audio) {
+		_audio->stop();
+		_audio = nullptr;
+		_audioFinished = true;
+	}
+
+	// Request File to perform in-place seek on the reader thread.
+	_file->requestSeek(position);
+}
+
+void Player::fileSeekDone(crl::time position) {
+	// Called from the File thread after seek completes.
+	crl::on_main(&_sessionGuard, [=] {
+		if (_video) {
+			checkVideoStep();
+		}
 	});
 }
 

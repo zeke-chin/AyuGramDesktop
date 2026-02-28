@@ -5141,6 +5141,8 @@ void OverlayWidget::restartAtProgress(float64 progress) {
 void OverlayWidget::restartAtSeekPosition(crl::time position) {
 	Expects(_streamed != nullptr);
 
+	const auto seekStart = crl::now();
+
 	if (videoShown()) {
 		_streamed->instance.saveFrameToCover();
 		const auto saved = base::take(_rotation);
@@ -5178,7 +5180,13 @@ void OverlayWidget::restartAtSeekPosition(crl::time position) {
 			_pip = nullptr;
 		}
 	}
+	const auto beforePlay = crl::now();
 	_streamed->instance.play(options);
+	LOG(("Seek Timing: cover+options=%1ms, play()=%2ms, total=%3ms, pos=%4"
+		).arg(beforePlay - seekStart
+		).arg(crl::now() - beforePlay
+		).arg(crl::now() - seekStart
+		).arg(position));
 	if (_streamingStartPaused) {
 		_streamed->instance.pause();
 	} else {
@@ -6728,12 +6736,6 @@ void OverlayWidget::handleKeyPress(not_null<QKeyEvent*> e) {
 				activateControls();
 				const auto index = int(key - Qt::Key_0);
 				restartAtProgress(index / 10.0);
-			} else if (key == Qt::Key_Left) {
-				activateControls();
-				seekRelativeTime(-kSeekTimeMs);
-			} else if (key == Qt::Key_Right) {
-				activateControls();
-				seekRelativeTime(kSeekTimeMs);
 			}
 			return;
 		}

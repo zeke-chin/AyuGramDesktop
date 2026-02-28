@@ -110,6 +110,12 @@ void Instance::play(const PlaybackOptions &options) {
 	_shared->play(options);
 }
 
+void Instance::seek(crl::time position) {
+	Expects(_shared != nullptr);
+
+	_shared->player().seek(position);
+}
+
 void Instance::pause() {
 	Expects(_shared != nullptr);
 

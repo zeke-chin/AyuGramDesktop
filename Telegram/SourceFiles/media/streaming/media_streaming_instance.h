@@ -55,6 +55,7 @@ public:
 	[[nodiscard]] rpl::producer<int> switchQualityRequests() const;
 
 	void play(const PlaybackOptions &options);
+	void seek(crl::time position);
 	void pause();
 	void resume();
 	void stop();

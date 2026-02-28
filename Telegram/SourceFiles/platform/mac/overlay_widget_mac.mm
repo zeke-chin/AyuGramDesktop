@@ -105,7 +105,9 @@ void MacOverlayWidgetHelper::updateStyles(bool fullscreen) {
 	}
 	[window setCollectionBehavior:behavior];
 
-	[window setHidesOnDeactivate:!_data->window->testAttribute(Qt::WA_MacAlwaysShowToolWindow)];
+	// Never hide the overlay on deactivate: prevents the video viewer from
+	// auto-hiding when the user switches to another window.
+	[window setHidesOnDeactivate:NO];
 	[window setTitleVisibility:NSWindowTitleHidden];
 	[window setTitlebarAppearsTransparent:YES];
 	[window setStyleMask:[window styleMask] | NSWindowStyleMaskFullSizeContentView];

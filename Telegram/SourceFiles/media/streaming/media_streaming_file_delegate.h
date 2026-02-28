@@ -28,6 +28,8 @@ public:
 	virtual void fileWaitingForData() = 0;
 	virtual void fileFullInCache(bool fullInCache) = 0;
 
+	virtual void fileSeekDone(crl::time position) = 0;
+
 	virtual void fileProcessEndOfFile() = 0;
 	// Return true if reading and processing more packets is desired.
 	// Return false if sleeping until 'wake()' is called is desired.

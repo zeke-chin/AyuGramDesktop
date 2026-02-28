@@ -48,6 +48,7 @@ public:
 	// Called from the main thread.
 	void setSpeed(float64 speed);
 	void setWaitForMarkAsShown(bool wait);
+	void seekFlush(crl::time targetPosition);
 
 	// Called from the main thread.
 	// Returns the position of the displayed frame.
